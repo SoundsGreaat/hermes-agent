@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin
@@ -138,6 +139,15 @@ def _transcribe_openai(
         logger.info("Model %s not available on OpenAI, using %s", model_name, DEFAULT_STT_MODEL)
         model_name = DEFAULT_STT_MODEL
 
+    configured_extra_body: Dict[str, Any] = {}
+    if provider_label == "openai":
+        from tools.transcription_tools import _load_stt_config
+        extra_body = _get_stt_section(_load_stt_config(), "openai").get("extra_body")
+        if extra_body is not None:
+            if not isinstance(extra_body, Mapping):
+                return _error_result("stt.openai.extra_body must be a mapping")
+            configured_extra_body = dict(extra_body)
+
     def _run(client):
         from openai import APIStatusError
 
@@ -148,10 +158,17 @@ def _transcribe_openai(
             if language:
                 # gpt-transcribe takes a ``languages`` list and rejects the legacy field.
                 if model_name == "gpt-transcribe":
-                    create_kwargs["extra_body"] = {"languages": [language]}
+                    create_kwargs["extra_body"] = {
+                        **configured_extra_body,
+                        "languages": [language],
+                    }
                 else:
                     create_kwargs["language"] = language
+                    if configured_extra_body:
+                        create_kwargs["extra_body"] = configured_extra_body
                 logger.debug("Using language hint '%s' for OpenAI STT", language)
+            elif configured_extra_body:
+                create_kwargs["extra_body"] = configured_extra_body
             if prompt:  # only when set so the bare request stays byte-identical
                 create_kwargs["prompt"] = prompt
             with open(path, "rb") as audio_file:

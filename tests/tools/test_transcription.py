@@ -179,6 +179,68 @@ class TestTranscribeOpenAI:
         assert result["success"] is True
         assert "language" not in mock_client.audio.transcriptions.create.call_args.kwargs
 
+    def test_configured_extra_body_reaches_openai_transcription(self, tmp_path):
+        audio_file = tmp_path / "test.ogg"
+        audio_file.write_bytes(b"fake audio")
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = "Hello"
+
+        with patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("tools.transcription_tools._load_stt_config", return_value={
+                 "openai": {"extra_body": {"vendor_specific_option": {"enabled": True}}},
+            }), \
+             patch("openai.OpenAI", return_value=mock_client):
+            from tools.transcription_tools import _transcribe_openai
+            result = _transcribe_openai(
+                str(audio_file), "whisper-1", api_key="sk-test", language="en",
+            )
+
+        assert result["success"] is True
+        create_kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
+        assert create_kwargs["extra_body"] == {
+            "vendor_specific_option": {"enabled": True},
+        }
+        assert create_kwargs["language"] == "en"
+
+    def test_gpt_transcribe_merges_configured_extra_body_with_language(self, tmp_path):
+        audio_file = tmp_path / "test.ogg"
+        audio_file.write_bytes(b"fake audio")
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = "Hello"
+
+        with patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("tools.transcription_tools._load_stt_config", return_value={
+                 "openai": {"extra_body": {"provider": {"foo": "bar"}, "languages": ["de"]}},
+             }), \
+             patch("openai.OpenAI", return_value=mock_client):
+            from tools.transcription_tools import _transcribe_openai
+            result = _transcribe_openai(
+                str(audio_file), "gpt-transcribe", api_key="sk-test", language="uk",
+            )
+
+        assert result["success"] is True
+        assert mock_client.audio.transcriptions.create.call_args.kwargs["extra_body"] == {
+            "provider": {"foo": "bar"},
+            "languages": ["uk"],
+        }
+
+    def test_extra_body_requires_mapping(self, tmp_path):
+        audio_file = tmp_path / "test.ogg"
+        audio_file.write_bytes(b"fake audio")
+        mock_client = MagicMock()
+
+        with patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("tools.transcription_tools._load_stt_config", return_value={
+                 "openai": {"extra_body": "not-a-mapping"},
+             }), \
+             patch("openai.OpenAI", return_value=mock_client):
+            from tools.transcription_tools import _transcribe_openai
+            result = _transcribe_openai(str(audio_file), "whisper-1", api_key="sk-test")
+
+        assert result["success"] is False
+        assert result["error"] == "stt.openai.extra_body must be a mapping"
+        mock_client.audio.transcriptions.create.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Main transcribe_audio() dispatch
